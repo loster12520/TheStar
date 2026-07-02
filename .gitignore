@@ -1,0 +1,8 @@
+.gradle
+.idea
+build
+**/build
+gradle/wrapper/gradle-wrapper.jar
+.kotlin
+kotlin-js-store
+yarn-offline
