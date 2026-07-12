@@ -1,8 +1,8 @@
 plugins {
-    kotlin("multiplatform") version "2.1.0"
+    kotlin("multiplatform")
 }
 
-group = "com.thestar.front"
+group = "com.lignting.thestar.front"
 version = "0.1-SNAPSHOT"
 
 // 覆盖 Yarn 下载地址，解决国内网络访问 GitHub 的 SSL 问题
@@ -23,6 +23,7 @@ kotlin {
         jsMain {
             dependencies {
                 // 后续按需添加 npm 依赖
+                implementation(project(":thestar:reactive"))
             }
         }
     }
