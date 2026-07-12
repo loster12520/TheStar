@@ -14,3 +14,7 @@ dependencyResolutionManagement {
 
 rootProject.name = "TheStar"
 include(":front")
+include(":thestar:reactive")
+include(":thestar:dom")
+include(":thestar:style")
+include(":thestar:ui")
