@@ -6,7 +6,7 @@ kotlin {
     sourceSets {
         jsMain {
             dependencies {
-                // reactive 是底层模块，暂无额外依赖
+                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
             }
         }
     }
