@@ -71,14 +71,13 @@ internal fun <T : Any> ObserverNode?.changeCurrentObserver(callback: () -> T): T
 }
 
 internal interface ReactiveNode {
-    val observers: MutableSet<ReactiveNode>
-    var dirty: Boolean
-    
-    fun markDirty()
+    fun markDirty(updateNext: Boolean = true)
 }
 
 internal interface ObservedNode<T> : ReactiveNode {
+    val observers: MutableSet<ObserverNode>
     var value: T?
+    var dirty: Boolean
     
     fun read(): T {
         val observer = TrackingContext.currentObserver
@@ -89,13 +88,14 @@ internal interface ObservedNode<T> : ReactiveNode {
         return value ?: throw this::class.uninitializedException()
     }
     
-    override fun markDirty() {
+    override fun markDirty(updateNext: Boolean) {
         if (dirty) return
         dirty = true
-        // 迭代副本：下游 markDirty 可能触发 recompute → cleanupSources
-        // 从而修改本节点的 observers 集合，避免 ConcurrentModificationException
-        for (observer in observers.toList()) {
-            observer.markDirty()
+        
+        if (updateNext) {
+            for (observer in observers.toList()) {
+                observer.markDirty()
+            }
         }
     }
 }
@@ -105,7 +105,7 @@ internal interface WritableNode<T> : ObservedNode<T> {
         if (value == newValue) return false
         value = newValue
         
-        for (observer in observers) {
+        for (observer in observers.toList()) {
             observer.markDirty()
         }
         scheduleFlush()
@@ -114,9 +114,9 @@ internal interface WritableNode<T> : ObservedNode<T> {
 }
 
 internal interface ObserverNode : ReactiveNode {
-    val sources: MutableSet<ReactiveNode>
+    val sources: MutableSet<ObservedNode<*>>
     
-    fun addSource(source: ReactiveNode) {
+    fun addSource(source: ObservedNode<*>) {
         sources.add(source)
     }
     
@@ -128,22 +128,26 @@ internal interface ObserverNode : ReactiveNode {
     }
 }
 
-internal abstract class BasicNode : ReactiveNode {
-    override val observers: MutableSet<ReactiveNode> = mutableSetOf()
+internal abstract class BasicObservedNode<T> : ObservedNode<T> {
+    override val observers: MutableSet<ObserverNode> = mutableSetOf()
     override var dirty: Boolean = false
+}
+
+internal abstract class BasicObserverNode : ObserverNode {
+    override val sources: MutableSet<ObservedNode<*>> = mutableSetOf()
 }
 
 internal class SignalNode<T>(
     initialValue: T
-) : BasicNode(), WritableNode<T> {
+) : BasicObservedNode<T>(), WritableNode<T> {
     override var value: T? = initialValue
 }
 
 internal class MemoNode<T>(
     private val eager: Boolean = false,
     private val callback: () -> T,
-) : BasicNode(), ObservedNode<T>, ObserverNode, Disposable {
-    override val sources: MutableSet<ReactiveNode> = mutableSetOf()
+) : BasicObservedNode<T>(), ObserverNode, Disposable {
+    override val sources: MutableSet<ObservedNode<*>> = mutableSetOf()
     override var value: T? = null
     private var initialized: Boolean = false
     
@@ -154,12 +158,12 @@ internal class MemoNode<T>(
         }
     }
     
-    override fun markDirty() {
+    override fun markDirty(updateNext: Boolean) {
         if (dirty) return
-        super.markDirty()
-        if (eager && initialized) {
+        val recomputeResult = if (eager && initialized) {
             recompute()
-        }
+        } else false
+        super.markDirty(!recomputeResult)
     }
     
     override fun read(): T {
@@ -169,11 +173,14 @@ internal class MemoNode<T>(
         return super.read()
     }
     
-    private fun recompute() {
+    private fun recompute(): Boolean {
         cleanupSources()
-        
-        changeCurrentObserver {
-            value = callback()
+        return changeCurrentObserver {
+            val newValue = callback()
+            val compare = value?.equals(newValue) ?: false
+            value = newValue
+            compare
+        }.also {
             initialized = true
             dirty = false
         }
@@ -187,11 +194,10 @@ internal class MemoNode<T>(
 
 internal class EffectNode(
     private val callback: () -> Unit
-) : BasicNode(), ObserverNode, Disposable {
-    override val sources: MutableSet<ReactiveNode> = mutableSetOf()
+) : BasicObserverNode(), ObserverNode, Disposable {
     private var disposed: Boolean = false
     
-    override fun markDirty() {
+    override fun markDirty(updateNext: Boolean) {
         if (disposed) return
         TrackingContext.pendingEffects.add(this)
         scheduleFlush()
