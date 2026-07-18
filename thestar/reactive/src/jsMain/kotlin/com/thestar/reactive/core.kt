@@ -1,5 +1,13 @@
 package com.thestar.reactive
 
+/**
+ * 一个空[ObserverNode]常量,简化[untrack]的调用。
+ *
+ * @author lignting
+ * @since 0.0.1
+ * @see untrack
+ */
+internal val emptyObserver: ObserverNode? = null
 
 /**
  * 全局追踪上下文单例。
@@ -10,6 +18,7 @@ package com.thestar.reactive
  * @since 0.0.1
  */
 internal object TrackingContext {
+    
     /**
      * 当前正在创建的观察者节点。
      *
@@ -18,7 +27,7 @@ internal object TrackingContext {
      * @author lignting
      * @since 0.0.1
      */
-    var currentObserver: ObserverNode? = null
+    var currentObserver: ObserverNode? = emptyObserver
     
     /**
      * 目前[batch]的深度计数器。
@@ -51,19 +60,21 @@ internal object TrackingContext {
     var scheduled: Boolean = false
 }
 
+internal fun <T : Any> ObserverNode?.changeCurrentObserver(callback: () -> T): T {
+    val prev = TrackingContext.currentObserver
+    TrackingContext.currentObserver = this
+    try {
+        return callback()
+    } finally {
+        TrackingContext.currentObserver = prev
+    }
+}
+
 internal interface ReactiveNode {
     val observers: MutableSet<ReactiveNode>
     var dirty: Boolean
     
-    fun markDirty() {
-        if (dirty) return
-        dirty = true
-        // 迭代副本：下游 markDirty 可能触发 recompute → cleanupSources
-        // 从而修改本节点的 observers 集合，避免 ConcurrentModificationException
-        for (observer in observers.toList()) {
-            observer.markDirty()
-        }
-    }
+    fun markDirty()
 }
 
 internal interface ObservedNode<T> : ReactiveNode {
@@ -78,11 +89,23 @@ internal interface ObservedNode<T> : ReactiveNode {
         return value ?: throw this::class.uninitializedException()
     }
     
+    override fun markDirty() {
+        if (dirty) return
+        dirty = true
+        // 迭代副本：下游 markDirty 可能触发 recompute → cleanupSources
+        // 从而修改本节点的 observers 集合，避免 ConcurrentModificationException
+        for (observer in observers.toList()) {
+            observer.markDirty()
+        }
+    }
+}
+
+internal interface WritableNode<T> : ObservedNode<T> {
     fun write(newValue: T): Boolean {
         if (value == newValue) return false
         value = newValue
         
-        for (observer in observers.toList()) {
+        for (observer in observers) {
             observer.markDirty()
         }
         scheduleFlush()
@@ -105,23 +128,86 @@ internal interface ObserverNode : ReactiveNode {
     }
 }
 
-internal open class BasicNode : ReactiveNode {
+internal abstract class BasicNode : ReactiveNode {
     override val observers: MutableSet<ReactiveNode> = mutableSetOf()
     override var dirty: Boolean = false
 }
 
-internal class SignalNode<T>(initialValue: T) : BasicNode(), ObservedNode<T> {
+internal class SignalNode<T>(
+    initialValue: T
+) : BasicNode(), WritableNode<T> {
     override var value: T? = initialValue
 }
 
 internal class MemoNode<T>(
-    private val compute: () -> T,
-    private val eager: Boolean = false
-) : BasicNode(), ObservedNode<T>, ObserverNode {
+    private val eager: Boolean = false,
+    private val callback: () -> T,
+) : BasicNode(), ObservedNode<T>, ObserverNode, Disposable {
     override val sources: MutableSet<ReactiveNode> = mutableSetOf()
     override var value: T? = null
+    private var initialized: Boolean = false
+    
+    init {
+        // 如果是eager模式，则立刻更新一下值
+        if (eager) {
+            recompute()
+        }
+    }
+    
+    override fun markDirty() {
+        if (dirty) return
+        super.markDirty()
+        if (eager && initialized) {
+            recompute()
+        }
+    }
+    
+    override fun read(): T {
+        if (dirty || !initialized) {
+            recompute()
+        }
+        return super.read()
+    }
+    
+    private fun recompute() {
+        cleanupSources()
+        
+        changeCurrentObserver {
+            value = callback()
+            initialized = true
+            dirty = false
+        }
+    }
+    
+    override fun dispose() {
+        cleanupSources()
+        observers.clear()
+    }
 }
 
-internal class EffectNode(private val fn: () -> Unit) : BasicNode(), ObserverNode {
+internal class EffectNode(
+    private val callback: () -> Unit
+) : BasicNode(), ObserverNode, Disposable {
     override val sources: MutableSet<ReactiveNode> = mutableSetOf()
+    private var disposed: Boolean = false
+    
+    override fun markDirty() {
+        if (disposed) return
+        TrackingContext.pendingEffects.add(this)
+        scheduleFlush()
+    }
+    
+    fun execute() {
+        if (disposed) return
+        cleanupSources()
+        
+        changeCurrentObserver(callback)
+    }
+    
+    override fun dispose() {
+        if (disposed) return
+        disposed = true
+        cleanupSources()
+        TrackingContext.pendingEffects.remove(this)
+    }
 }
