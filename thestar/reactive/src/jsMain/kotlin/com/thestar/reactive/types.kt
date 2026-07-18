@@ -50,11 +50,8 @@ class Signal<T : Any> internal constructor(
 }
 
 class Memo<T : Any> internal constructor(
-    internal val node: MemoNode<T>
-) : Basic<T>(node), Observables<T> {
-    override val value: T
-        get() = node.read()
-}
+    node: MemoNode<T>
+) : Basic<T>(node), Observables<T>
 
 class Effect internal constructor(
     private val node: EffectNode

@@ -10,7 +10,7 @@ fun <T : Any> memo(
     Memo(MemoNode(eager, callback))
 
 fun effect(callback: () -> Unit): Effect =
-    Effect(EffectNode(callback))
+    Effect(EffectNode(callback).also { it.execute() })
 
 fun <T : Any> untrack(callback: () -> T): T =
     emptyObserver.changeCurrentObserver(callback)
