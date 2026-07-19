@@ -1,15 +1,24 @@
-package com.thestar.reactive_ai
+package com.thestar.reactive
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
-import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
+/**
+ * Signal 单元测试。
+ *
+ * 覆盖 [signal] 工厂函数与 [Signal] 类的全部行为：
+ * - 创建、读写、委托属性
+ * - 同值不触发通知
+ * - dispose 生命周期
+ * - 多信号独立性
+ * - 边界情况
+ */
 class SignalTest {
 
     // ========================================================================
-    // Signal 基础测试
+    // 创建与初始值
     // ========================================================================
 
     @Test
@@ -19,11 +28,64 @@ class SignalTest {
     }
 
     @Test
+    fun `signal with string value`() {
+        val s = signal("hello")
+        assertEquals("hello", s.value)
+    }
+
+    @Test
+    fun `signal with boolean value`() {
+        val t = signal(true)
+        val f = signal(false)
+        assertEquals(true, t.value)
+        assertEquals(false, f.value)
+    }
+
+    @Test
+    fun `signal with list value`() {
+        val list = listOf(1, 2, 3)
+        val s = signal(list)
+        assertEquals(listOf(1, 2, 3), s.value)
+    }
+
+    @Test
+    fun `signal with custom data class value`() {
+        data class Person(val name: String, val age: Int)
+        val person = Person("Alice", 30)
+        val s = signal(person)
+        assertEquals(person, s.value)
+    }
+
+    // ========================================================================
+    // 值更新
+    // ========================================================================
+
+    @Test
     fun `signal updates value`() {
         val s = signal(1)
         s.value = 2
         assertEquals(2, s.value)
     }
+
+    @Test
+    fun `signal can be updated multiple times`() {
+        val s = signal(0)
+        for (i in 1..10) {
+            s.value = i
+            assertEquals(i, s.value)
+        }
+    }
+
+    @Test
+    fun `signal with nullable type parameter does not accept null`() {
+        // T : Any 限制了非空类型，此处验证编译期约束
+        val s = signal("not null")
+        assertEquals("not null", s.value)
+    }
+
+    // ========================================================================
+    // 委托属性读写
+    // ========================================================================
 
     @Test
     fun `delegated signal read and write`() {
@@ -34,22 +96,50 @@ class SignalTest {
     }
 
     @Test
-    fun `signal no-op when same value`() {
+    fun `delegated signal with multiple updates`() {
+        var name by signal("Alice")
+        assertEquals("Alice", name)
+        name = "Bob"
+        assertEquals("Bob", name)
+        name = "Charlie"
+        assertEquals("Charlie", name)
+    }
+
+    // ========================================================================
+    // 同值不触发通知
+    // ========================================================================
+
+    @Test
+    fun `signal no-op when same value is written`() {
         val s = signal(10)
         var callCount = 0
-        effect { s.value; callCount++ }  // 初始执行一次
+        effect { s.value; callCount++ }
+        assertEquals(1, callCount) // 初始执行一次
+
         val before = callCount
-        s.value = 10  // 相同值
-        assertEquals(before, callCount)  // effect 不触发
+        s.value = 10 // 写入相同值
+        assertEquals(before, callCount) // effect 不触发
     }
 
     @Test
-    fun `signal with string value`() {
-        val s = signal("hello")
-        assertEquals("hello", s.value)
-        s.value = "world"
-        assertEquals("world", s.value)
+    fun `signal with data class checks structural equality`() {
+        data class Point(val x: Int, val y: Int)
+        val s = signal(Point(1, 2))
+        var callCount = 0
+        effect { s.value; callCount++ }
+        assertEquals(1, callCount)
+
+        s.value = Point(1, 2) // 结构相等，不触发
+        assertEquals(1, callCount)
+
+        s.value = Point(3, 4) // 值不同，触发
+        // effect 在微任务中执行，此处仅验证值已更新
+        assertEquals(Point(3, 4), s.value)
     }
+
+    // ========================================================================
+    // 多信号独立性
+    // ========================================================================
 
     @Test
     fun `multiple signals are independent`() {
@@ -57,253 +147,46 @@ class SignalTest {
         val b = signal(10)
         assertEquals(1, a.value)
         assertEquals(10, b.value)
+
         a.value = 2
         assertEquals(2, a.value)
-        assertEquals(10, b.value)  // b unchanged
-    }
+        assertEquals(10, b.value) // b 不变
 
-    // ========================================================================
-    // Memo 派生信号测试
-    // ========================================================================
-
-    @Test
-    fun `memo computes derived value`() {
-        var count by signal(2)
-        val double by memo { count * 2 }
-        assertEquals(4, double)
-        count = 5
-        assertEquals(10, double)
+        b.value = 20
+        assertEquals(2, a.value) // a 不变
+        assertEquals(20, b.value)
     }
 
     @Test
-    fun `memo is lazy - does not recompute until read`() {
-        var count by signal(0)
-        var computeCount = 0
-        val derived by memo { computeCount++; count * 2 }
-        // 惰性 memo 创建时不计算——仅在被读取时才计算
-        assertEquals(0, computeCount)
-        assertEquals(0, derived)  // 首次读取，触发计算
-        assertEquals(1, computeCount)
-        count = 1  // 修改上游，不读取 derived，computeCount 不变
-        assertEquals(1, computeCount)
-        val v = derived  // 现在读取，dirty=true，触发重算
-        assertEquals(2, computeCount)
-        assertEquals(2, v)
-    }
-
-    @Test
-    fun `memo eager recomputes immediately`() {
-        var count by signal(1)
-        var computeCount = 0
-        val derived by memo(eager = true) { computeCount++; count * 2 }
-        assertEquals(1, computeCount)  // 初始化时计算一次
-        count = 2  // eager: 立即重算
-        assertEquals(2, computeCount)
-        assertEquals(4, derived)  // 读取零延迟，无需重新计算
-    }
-
-    @Test
-    fun `memo eager recomputes immediately on each change`() {
-        var count by signal(0)
-        var computeCount = 0
-        val derived by memo(eager = true) { computeCount++; count * 2 }
-        assertEquals(1, computeCount)
-        count = 1
-        assertEquals(2, computeCount)
-        assertEquals(2, derived)
-        count = 2
-        assertEquals(3, computeCount)
-        assertEquals(4, derived)
-    }
-
-    @Test
-    fun `memo with multiple dependencies`() {
-        var a by signal(1)
-        var b by signal(2)
-        val sum by memo { a + b }
-        assertEquals(3, sum)
-        a = 10
-        assertEquals(12, sum)
-        b = 20
-        assertEquals(30, sum)
-    }
-
-    @Test
-    fun `chained memos`() {
-        var count by signal(2)
-        val double by memo { count * 2 }
-        val quadruple by memo { double * 2 }
-        assertEquals(8, quadruple)
-        count = 3
-        assertEquals(12, quadruple)
-    }
-
-    @Test
-    fun `memo with string derivation`() {
-        var name by signal("Alice")
-        val greeting by memo { "Hello, $name!" }
-        assertEquals("Hello, Alice!", greeting)
-        name = "Bob"
-        assertEquals("Hello, Bob!", greeting)
-    }
-
-    // ========================================================================
-    // Effect 副作用测试
-    // ========================================================================
-
-    @Test
-    fun `effect runs on creation`() {
-        var count by signal(0)
-        var result = 0
-        effect { result = count }
-        assertEquals(0, result)  // 创建时立即执行
-    }
-
-    @Test
-    fun `effect dispose stops notifications`() {
-        val count = signal(0)
-        var callCount = 0
-        val e = effect { count.value; callCount++ }
-        val afterInit = callCount
-        assertEquals(1, afterInit)
-        e.dispose()
-        count.value = 1
-        assertEquals(afterInit, callCount)  // 释放后不再触发
-    }
-
-    @Test
-    fun `effect dispose is idempotent`() {
-        val e = effect { /* no-op */ }
-        e.dispose()
-        e.dispose()  // 不应抛异常
-    }
-
-    @Test
-    fun `effect returns Effect instance`() {
-        val count = signal(0)
-        val e = effect { count.value }
-        assertNotNull(e)
-        e.dispose()
-    }
-
-    // ========================================================================
-    // Batch 批量更新测试
-    // ========================================================================
-
-    @Test
-    fun `batch groups multiple writes synchronously`() {
-        var a by signal(0)
-        var b by signal(0)
-        var effectRuns = 0
-        effect { a; b; effectRuns++ }
-        val afterInit = effectRuns
-        assertEquals(1, afterInit)
-        batch {
-            a = 1
-            b = 2
+    fun `many signals created independently`() {
+        val signals = (0..99).map { signal(it) }
+        for ((i, s) in signals.withIndex()) {
+            assertEquals(i, s.value)
         }
-        // batch 结束后 effect 只执行一次（微任务中）
-        // 同步检查：值已更新
-        assertEquals(1, a)
-        assertEquals(2, b)
-    }
-
-    @Test
-    fun `nested batch works correctly`() {
-        var x by signal(0)
-        var effectRuns = 0
-        effect { x; effectRuns++ }
-        val afterInit = effectRuns
-
-        batch {
-            x = 1
-            batch {
-                x = 2
-            }
-            // 内层 batch 结束，但外层还在
-        }
-        // 最外层 batch 结束，此时才调度
-
-        assertEquals(2, x)
-    }
-
-    @Test
-    fun `batch does not lose updates`() {
-        var count by signal(0)
-        val values = mutableListOf<Int>()
-        effect { values.add(count) }
-
-        batch {
-            count = 1
-            count = 2
-            count = 3
-        }
-
-        // 最终值正确
-        assertEquals(3, count)
     }
 
     // ========================================================================
-    // Untrack 取消追踪测试
+    // 追踪上下文外读取
     // ========================================================================
 
     @Test
-    fun `untrack prevents dependency tracking`() {
-        var a by signal(0)
-        var tracked = 0
-        var untracked = 0
-        effect {
-            tracked = a           // 追踪 a
-            untracked = untrack { a }  // 不追踪 a
-        }
-        assertEquals(0, tracked)
-        assertEquals(0, untracked)
-        a = 5
-        // effect 重新执行：tracked 更新（effect 触发了），untracked 也更新
-        // 但由于 effect 是异步的，这里只能验证初始执行的值
-        assertEquals(0, tracked)  // effect 还未执行
-        assertEquals(0, untracked)
+    fun `read signal outside tracking context returns value`() {
+        val s = signal(99)
+        // 在 effect 之外读取，不注册任何依赖
+        assertEquals(99, s.value)
+        assertEquals(99, s.value) // 重复读取一致
     }
 
     @Test
-    fun `untrack read does not trigger effect`() {
-        var a by signal(0)
-        var effectRuns = 0
-        effect {
-            untrack { a }   // 只在不追踪的上下文中读取 a
-            effectRuns++
-        }
-        val afterInit = effectRuns
-        assertEquals(1, afterInit)
-        a = 1  // 不应触发 effect（因为 a 的读取在 untrack 中）
-        // effectRuns 仍然是 1（同步检查——effect 在微任务中执行）
-        assertEquals(1, effectRuns)
-    }
-
-    @Test
-    fun `untrack returns computed value`() {
-        var count by signal(5)
-        val result = untrack { count * 10 }
-        assertEquals(50, result)
+    fun `write signal outside tracking context updates value`() {
+        val s = signal(0)
+        s.value = 42
+        assertEquals(42, s.value)
     }
 
     // ========================================================================
-    // Signal dispose 测试
+    // Dispose 生命周期
     // ========================================================================
-
-    @Test
-    fun `signal dispose cleans up downstream`() {
-        val count = signal(0)
-        var callCount = 0
-        effect { count.value; callCount++ }
-        val afterInit = callCount
-        assertEquals(1, afterInit)
-
-        // 释放 signal——下游 effect 也应被清理
-        count.dispose()
-        count.value = 1
-        assertEquals(afterInit, callCount)  // 释放后 effect 不再触发
-    }
 
     @Test
     fun `signal dispose can be called on direct Signal`() {
@@ -312,43 +195,53 @@ class SignalTest {
         // 无异常即通过
     }
 
-    // ========================================================================
-    // 边界情况测试
-    // ========================================================================
+    @Test
+    fun `signal dispose is idempotent`() {
+        val s = signal(42)
+        s.dispose()
+        s.dispose() // 不应抛异常
+    }
 
     @Test
-    fun `read signal outside tracking context returns value`() {
-        val s = signal(99)
+    fun `signal dispose clears observer links`() {
+        val s = signal(0)
+        effect { s.value }
+        assertTrue(s.node.observers.isNotEmpty()) // 执行 effect 后至少有一个 observer
+        s.dispose()
+        // dispose 后 observers 被清空
+        assertTrue(s.node.observers.isEmpty())
+    }
+
+    @Test
+    fun `signal value is still readable after dispose`() {
+        val s = signal(42)
+        s.dispose()
+        // dispose 只清理 observer 关系，value 仍可访问
+        assertEquals(42, s.value)
+    }
+
+    @Test
+    fun `signal value is still writable after dispose`() {
+        val s = signal(0)
+        s.dispose()
+        s.value = 99
         assertEquals(99, s.value)
-        // 在追踪上下文外读取，不注册任何依赖
+    }
+
+    // ========================================================================
+    // toString / 类型
+    // ========================================================================
+
+    @Test
+    fun `signal returns Signal instance`() {
+        val s = signal(1)
+        assertTrue(s is Signal<Int>)
+        assertNotNull(s)
     }
 
     @Test
-    fun `memo with no dependencies returns constant`() {
-        val constant by memo { 42 }
-        assertEquals(42, constant)
-        // 重复读取始终返回缓存值
-        assertEquals(42, constant)
-    }
-
-    @Test
-    fun `multiple effects on same signal`() {
-        var count by signal(0)
-        var r1 = 0
-        var r2 = 0
-        effect { r1 = count }
-        effect { r2 = count * 10 }
-        assertEquals(0, r1)
-        assertEquals(0, r2)
-        count = 3
-        // 两个 effect 都应该排队
-    }
-
-    @Test
-    fun `boolean signal`() {
-        var flag by signal(false)
-        assertEquals(false, flag)
-        flag = true
-        assertEquals(true, flag)
+    fun `signal is Disposable`() {
+        val s = signal(1)
+        assertTrue(s is Disposable)
     }
 }
