@@ -71,7 +71,7 @@ internal fun <T : Any> ObserverNode?.changeCurrentObserver(callback: () -> T): T
 }
 
 internal interface ReactiveNode {
-    fun markDirty(updateNext: Boolean = true)
+    fun markDirty()
 }
 
 internal interface ObservedNode<T> : ReactiveNode {
@@ -88,14 +88,12 @@ internal interface ObservedNode<T> : ReactiveNode {
         return value ?: throw this::class.uninitializedException()
     }
     
-    override fun markDirty(updateNext: Boolean) {
+    override fun markDirty() {
         if (dirty) return
         dirty = true
         
-        if (updateNext) {
-            for (observer in observers.toList()) {
-                observer.markDirty()
-            }
+        for (observer in observers.toList()) {
+            observer.markDirty()
         }
     }
 }
@@ -125,6 +123,31 @@ internal interface ObserverNode : ReactiveNode {
             source.observers.remove(this)
         }
         sources.clear()
+    }
+    
+    fun <T> cleanupSourcesSafety(callback: () -> T): T {
+        val oldSources = sources.toSet()
+        sources.clear()
+        
+        try {
+            val result = callback()
+            for (oldSource in oldSources) {
+                if (oldSource !in sources) {
+                    oldSource.observers.remove(this)
+                }
+            }
+            return result
+        } catch (e: Throwable) {
+            val newSources = sources.toSet()
+            sources.clear()
+            sources.addAll(oldSources)
+            for (newSource in newSources) {
+                if (newSource !in oldSources) {
+                    newSource.observers.remove(this)
+                }
+            }
+            throw e
+        }
     }
 }
 
@@ -158,12 +181,19 @@ internal class MemoNode<T>(
         }
     }
     
-    override fun markDirty(updateNext: Boolean) {
+    override fun markDirty() {
         if (dirty) return
-        val recomputeResult = if (eager && initialized) {
-            recompute()
-        } else false
-        super.markDirty(!recomputeResult)
+        if (eager && initialized) {
+            val unchanged = recompute()
+            if (!unchanged) {
+                for (observer in observers.toList()) {
+                    observer.markDirty()
+                }
+            }
+        } else {
+            super.markDirty()
+        }
+        
     }
     
     override fun read(): T {
@@ -173,18 +203,18 @@ internal class MemoNode<T>(
         return super.read()
     }
     
-    private fun recompute(): Boolean {
-        cleanupSources()
-        return changeCurrentObserver {
-            val newValue = callback()
-            val compare = value?.equals(newValue) ?: false
-            value = newValue
-            compare
-        }.also {
-            initialized = true
-            dirty = false
+    private fun recompute(): Boolean =
+        cleanupSourcesSafety {
+            changeCurrentObserver {
+                val newValue = callback()
+                val compare = value?.equals(newValue) ?: false
+                value = newValue
+                compare
+            }.also {
+                initialized = true
+                dirty = false
+            }
         }
-    }
     
     override fun dispose() {
         cleanupSources()
@@ -197,7 +227,7 @@ internal class EffectNode(
 ) : BasicObserverNode(), ObserverNode, Disposable {
     private var disposed: Boolean = false
     
-    override fun markDirty(updateNext: Boolean) {
+    override fun markDirty() {
         if (disposed) return
         TrackingContext.pendingEffects.add(this)
         scheduleFlush()
@@ -205,9 +235,9 @@ internal class EffectNode(
     
     fun execute() {
         if (disposed) return
-        cleanupSources()
-        
-        changeCurrentObserver(callback)
+        cleanupSourcesSafety {
+            changeCurrentObserver(callback)
+        }
     }
     
     override fun dispose() {
