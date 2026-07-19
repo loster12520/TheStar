@@ -6,3 +6,6 @@ gradle/wrapper/gradle-wrapper.jar
 .kotlin
 kotlin-js-store
 yarn-offline
+
+doc/test
+.claude/worktrees
