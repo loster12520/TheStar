@@ -8,7 +8,7 @@ import kotlinx.coroutines.yield
 private val scope = CoroutineScope(Dispatchers.Main)
 
 internal fun scheduleFlush() {
-    if(
+    if (
         TrackingContext.batchDepth > 0 ||
         TrackingContext.scheduled ||
         TrackingContext.pendingEffects.isEmpty()
@@ -31,6 +31,10 @@ private fun flushEffects() {
     TrackingContext.pendingEffects.clear()
     
     for (effect in effects) {
-        effect.execute()
+        try {
+            effect.execute()
+        } catch (e: Throwable) {
+            logger.error { "Error while flushing effect: $e" }
+        }
     }
 }

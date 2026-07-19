@@ -26,10 +26,8 @@ abstract class Basic<T : Any> internal constructor(
         get() = basicNode.read()
     
     override fun dispose() {
-        basicNode.observers.filter {
-            it is Disposable
-        }.forEach {
-            (it as Disposable).dispose()
+        basicNode.observers.toList().forEach { observer ->
+            observer.sources.remove(basicNode)
         }
         basicNode.observers.clear()
         
