@@ -1,6 +1,6 @@
 package com.thestar.reactive
 
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -32,6 +32,7 @@ class UntrackTest {
 
     @Test
     fun `untrack prevents dependency tracking`() = runTest {
+        resetSchedulerScope(this)
         val a = signal(0)
         var effectRuns = 0
         effect {
@@ -42,7 +43,7 @@ class UntrackTest {
         assertEquals(1, afterInit)
 
         a.value = 1 // 不应触发 effect
-        delay(1)
+        runCurrent()
         assertEquals(1, effectRuns)
     }
 
@@ -74,6 +75,7 @@ class UntrackTest {
 
     @Test
     fun `untrack mixed with tracked reads in same effect`() = runTest {
+        resetSchedulerScope(this)
         val a = signal(0)
         val b = signal(0)
         var tracked = 0
@@ -87,13 +89,13 @@ class UntrackTest {
 
         // 只修改 b，不应触发 effect
         b.value = 5
-        delay(1)
+        runCurrent()
         // a 未变，effect 不应触发
         assertEquals(0, tracked)
 
         // 修改 a，触发 effect
         a.value = 1
-        delay(1)
+        runCurrent()
         assertEquals(1, tracked)
         assertEquals(5, untracked) // untrack 也更新了（因为 effect 整体重跑了）
     }

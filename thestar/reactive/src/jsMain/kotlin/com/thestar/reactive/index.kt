@@ -9,8 +9,15 @@ fun <T : Any> memo(
 ): Memo<T> =
     Memo(MemoNode(eager, callback))
 
-fun effect(callback: () -> Unit): Effect =
-    Effect(EffectNode(callback).also { it.execute() })
+fun effect(callback: () -> Unit): Effect {
+    val node = EffectNode(callback)
+    try {
+        node.execute()
+    } catch (e: Throwable) {
+        logger.error(e) { "Error during initial effect execution" }
+    }
+    return Effect(node)
+}
 
 fun <T : Any> untrack(callback: () -> T): T =
     emptyObserver.changeCurrentObserver(callback)

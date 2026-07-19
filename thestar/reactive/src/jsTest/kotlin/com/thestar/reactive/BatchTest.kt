@@ -1,6 +1,6 @@
 package com.thestar.reactive
 
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -23,6 +23,7 @@ class BatchTest {
 
     @Test
     fun `batch groups multiple writes into single effect run`() = runTest {
+        resetSchedulerScope(this)
         val a = signal(0)
         val b = signal(0)
         var effectRuns = 0
@@ -37,7 +38,7 @@ class BatchTest {
         // 同步：effect 尚未执行
         assertEquals(1, effectRuns)
 
-        delay(1)
+        runCurrent()
         // batch 结束后 effect 只执行一次
         assertEquals(2, effectRuns)
     }
@@ -58,6 +59,7 @@ class BatchTest {
 
     @Test
     fun `batch with multiple writes to same signal`() = runTest {
+        resetSchedulerScope(this)
         val count = signal(0)
         var effectRuns = 0
         effect { count.value; effectRuns++ }
@@ -71,7 +73,7 @@ class BatchTest {
         assertEquals(3, count.value)
         assertEquals(1, effectRuns) // 尚未执行
 
-        delay(1)
+        runCurrent()
         assertEquals(2, effectRuns) // 只执行一次
     }
 
@@ -81,6 +83,7 @@ class BatchTest {
 
     @Test
     fun `nested batch defers flush to outermost batch end`() = runTest {
+        resetSchedulerScope(this)
         val x = signal(0)
         var effectRuns = 0
         effect { x.value; effectRuns++ }
@@ -97,12 +100,13 @@ class BatchTest {
         // 最外层 batch 结束，此时才调度 flush
         assertEquals(2, x.value)
 
-        delay(1)
+        runCurrent()
         assertEquals(afterInit + 1, effectRuns) // 只执行一次
     }
 
     @Test
     fun `triple nested batch works correctly`() = runTest {
+        resetSchedulerScope(this)
         val x = signal(0)
         var effectRuns = 0
         effect { x.value; effectRuns++ }
@@ -119,7 +123,7 @@ class BatchTest {
         assertEquals(99, x.value)
         assertEquals(1, effectRuns)
 
-        delay(1)
+        runCurrent()
         assertEquals(2, effectRuns)
     }
 
@@ -213,21 +217,22 @@ class BatchTest {
 
     @Test
     fun `successive batches work independently`() = runTest {
+        resetSchedulerScope(this)
         val count = signal(0)
         var effectRuns = 0
         effect { count.value; effectRuns++ }
         assertEquals(1, effectRuns)
 
         batch { count.value = 1 }
-        delay(1)
+        runCurrent()
         assertEquals(2, effectRuns)
 
         batch { count.value = 2 }
-        delay(1)
+        runCurrent()
         assertEquals(3, effectRuns)
 
         batch { count.value = 3 }
-        delay(1)
+        runCurrent()
         assertEquals(4, effectRuns)
     }
 }

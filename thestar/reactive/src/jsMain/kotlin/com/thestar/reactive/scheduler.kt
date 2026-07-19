@@ -3,9 +3,34 @@ package com.thestar.reactive
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.yield
 
-private val scope = CoroutineScope(Dispatchers.Main)
+/**
+ * 调度器使用的协程作用域。
+ *
+ * 默认为 [Dispatchers.Main]。测试环境可通过 [resetSchedulerScope] 替换为
+ * 测试调度器（如 `runTest` 提供的 `TestScope`）。
+ */
+internal var schedulerScope: CoroutineScope = CoroutineScope(Dispatchers.Main)
+
+/**
+ * 重置调度器作用域（仅供测试使用）。
+ *
+ * 调用示例（在 `runTest` 中）：
+ * ```kotlin
+ * @Test
+ * fun test() = runTest {
+ *     resetSchedulerScope(this)  // this 即 TestScope
+ *     // ... 测试逻辑，delay() 将正确驱动 effect flush
+ * }
+ * ```
+ */
+internal fun resetSchedulerScope(scope: CoroutineScope) {
+    schedulerScope = scope
+    // 重置全局状态，防止前一个测试留下的脏状态污染当前测试
+    TrackingContext.scheduled = false
+    TrackingContext.batchDepth = 0
+    TrackingContext.pendingEffects.clear()
+}
 
 internal fun scheduleFlush() {
     if (
@@ -14,11 +39,9 @@ internal fun scheduleFlush() {
         TrackingContext.pendingEffects.isEmpty()
     )
         return
-    
+
     TrackingContext.scheduled = true
-    scope.launch {
-        // 让出当前线程，将 flushEffects 安排在下一个微任务
-        yield()
+    schedulerScope.launch {
         flushEffects()
     }
 }
