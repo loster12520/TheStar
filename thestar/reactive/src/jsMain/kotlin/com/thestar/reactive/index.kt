@@ -11,11 +11,7 @@ fun <T : Any> memo(
 
 fun effect(callback: () -> Unit): Effect {
     val node = EffectNode(callback)
-    try {
-        node.execute()
-    } catch (e: Throwable) {
-        logger.error(e) { "Error during initial effect execution" }
-    }
+    node.execute()
     return Effect(node)
 }
 
