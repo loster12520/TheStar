@@ -6,50 +6,48 @@ interface Disposable {
     fun dispose()
 }
 
-internal interface Observables<T : Any> : Disposable {
-    val value: T
-    
-    operator fun getValue(thisRef: Any?, property: KProperty<*>): T = value
+internal interface Observables<T : Any?> {
+    operator fun getValue(thisRef: Any?, property: KProperty<*>): T
 }
 
-internal interface Writable<T : Any> : Observables<T> {
+internal interface Writable<T : Any?> : Observables<T> {
+    operator fun setValue(thisRef: Any?, property: KProperty<*>, value: T)
+}
+
+abstract class BasicObservables<T : Any?> internal constructor(
+    internal open val basicNode: ObservedNode<T>
+) : Observables<T> {
+    internal open val value: T
+        get() = basicNode.read()
+    
+    override operator fun getValue(thisRef: Any?, property: KProperty<*>): T = value
+}
+
+abstract class BasicWritable<T : Any?> internal constructor(
+    override val basicNode: SignalNode<T>
+) : BasicObservables<T>(basicNode), Writable<T> {
     override var value: T
-    operator fun setValue(thisRef: Any?, property: KProperty<*>, value: T) {
+        get() = basicNode.read()
+        set(newValue) {
+            basicNode.write(newValue)
+        }
+    
+    override operator fun setValue(thisRef: Any?, property: KProperty<*>, value: T) {
         this.value = value
     }
 }
 
-abstract class Basic<T : Any> internal constructor(
-    internal val basicNode: ObservedNode<T>
-) : Observables<T> {
-    override val value: T
-        get() = basicNode.read()
-    
+class Signal<T : Any?> internal constructor(
+    node: SignalNode<T>
+) : BasicWritable<T>(node)
+
+class Memo<T : Any?> internal constructor(
+    private val node: MemoNode<T>
+) : BasicObservables<T>(node), Disposable {
     override fun dispose() {
-        basicNode.observers.toList().forEach { observer ->
-            observer.sources.remove(basicNode)
-        }
-        basicNode.observers.clear()
-        
-        if (basicNode is Disposable) {
-            basicNode.dispose()
-        }
+        node.dispose()
     }
 }
-
-class Signal<T : Any> internal constructor(
-    internal val node: SignalNode<T>
-) : Basic<T>(node), Writable<T> {
-    override var value: T
-        get() = node.read()
-        set(newValue) {
-            node.write(newValue)
-        }
-}
-
-class Memo<T : Any> internal constructor(
-    node: MemoNode<T>
-) : Basic<T>(node), Observables<T>
 
 class Effect internal constructor(
     private val node: EffectNode

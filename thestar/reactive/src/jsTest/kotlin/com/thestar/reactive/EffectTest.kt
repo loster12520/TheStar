@@ -1,7 +1,10 @@
-package com.thestar.reactive
+﻿package com.thestar.reactive
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -20,15 +23,23 @@ import kotlin.test.assertTrue
  */
 class EffectTest {
 
+    @BeforeTest
+    fun setUp() {
+        schedulerScope = CoroutineScope(Dispatchers.Default)
+        TrackingContext.scheduled = false
+        TrackingContext.batchDepth = 0
+        TrackingContext.pendingEffects.clear()
+    }
+
     // ========================================================================
     // 创建与初始执行
     // ========================================================================
 
     @Test
     fun `effect runs on creation`() {
-        val count = signal(0)
+        var count by signal(0)
         var result = 0
-        effect { result = count.value }
+        effect { result = count }
         assertEquals(0, result) // 创建时立即执行
     }
 
@@ -41,8 +52,8 @@ class EffectTest {
 
     @Test
     fun `effect returns Effect instance`() {
-        val count = signal(0)
-        val e = effect { count.value }
+        var count by signal(0)
+        val e = effect { count }
         assertNotNull(e)
         assertTrue(e is Effect)
         e.dispose()
@@ -50,10 +61,10 @@ class EffectTest {
 
     @Test
     fun `effect captures latest values from all read signals`() {
-        val a = signal(1)
-        val b = signal(2)
+        var a by signal(1)
+        var b by signal(2)
         var sum = 0
-        effect { sum = a.value + b.value }
+        effect { sum = a + b }
         assertEquals(3, sum)
     }
 
@@ -63,15 +74,15 @@ class EffectTest {
 
     @Test
     fun `effect triggers after signal write`() = runTest {
-        resetSchedulerScope(this)
-        val count = signal(0)
+        schedulerScope = this
+        var count by signal(0)
         var callCount = 0
-        effect { count.value; callCount++ }
+        effect { count; callCount++ }
 
         val afterInit = callCount
         assertEquals(1, afterInit)
 
-        count.value = 1
+        count = 1
         // 同步检查：effect 尚未执行（微任务调度）
         assertEquals(1, callCount)
 
@@ -82,15 +93,15 @@ class EffectTest {
 
     @Test
     fun `effect triggers once for multiple writes to same signal`() = runTest {
-        resetSchedulerScope(this)
-        val count = signal(0)
+        schedulerScope = this
+        var count by signal(0)
         var callCount = 0
-        effect { count.value; callCount++ }
+        effect { count; callCount++ }
         assertEquals(1, callCount)
 
-        count.value = 1
-        count.value = 2
-        count.value = 3
+        count = 1
+        count = 2
+        count = 3
         // 同步：尚未执行
         assertEquals(1, callCount)
 
@@ -101,22 +112,22 @@ class EffectTest {
 
     @Test
     fun `effect triggers independently for different signals`() = runTest {
-        resetSchedulerScope(this)
-        val a = signal(0)
-        val b = signal(0)
+        schedulerScope = this
+        var a by signal(0)
+        var b by signal(0)
         var effectA = 0
         var effectB = 0
-        effect { a.value; effectA++ }
-        effect { b.value; effectB++ }
+        effect { a; effectA++ }
+        effect { b; effectB++ }
         assertEquals(1, effectA)
         assertEquals(1, effectB)
 
-        a.value = 1
+        a = 1
         runCurrent()
         assertEquals(2, effectA)
         assertEquals(1, effectB) // b 的 effect 未触发
 
-        b.value = 1
+        b = 1
         runCurrent()
         assertEquals(2, effectA)
         assertEquals(2, effectB)
@@ -128,15 +139,15 @@ class EffectTest {
 
     @Test
     fun `effect dispose stops notifications`() = runTest {
-        resetSchedulerScope(this)
-        val count = signal(0)
+        schedulerScope = this
+        var count by signal(0)
         var callCount = 0
-        val e = effect { count.value; callCount++ }
+        val e = effect { count; callCount++ }
         val afterInit = callCount
         assertEquals(1, afterInit)
 
         e.dispose()
-        count.value = 1
+        count = 1
         runCurrent()
         assertEquals(afterInit, callCount) // 释放后不再触发
     }
@@ -151,21 +162,22 @@ class EffectTest {
 
     @Test
     fun `disposed effect is removed from pendingEffects`() {
-        val count = signal(0)
-        val e = effect { count.value }
-        count.value = 1 // 将 effect 加入 pendingEffects
+        var count by signal(0)
+        val e = effect { count }
+        count = 1 // 将 effect 加入 pendingEffects
         e.dispose() // dispose 应从 pendingEffects 中移除
         // 不应崩溃，e 已不在 pending set 中
     }
 
     @Test
     fun `effect dispose clears source relationships`() {
-        val count = signal(0)
-        val e = effect { count.value }
+        val countSig = signal(0)
+        var count by countSig
+        val e = effect { count }
         // effect 的 node 应该被 count 的 node 所观察
         e.dispose()
         // dispose 后 count 的 observer 集合应被清理
-        assertTrue(count.node.observers.isEmpty())
+        assertTrue(countSig.basicNode.observers.isEmpty())
     }
 
     // ========================================================================
@@ -174,17 +186,16 @@ class EffectTest {
 
     @Test
     fun `multiple effects on same signal`() = runTest {
-        resetSchedulerScope(this)
-
-        val count = signal(0)
+        schedulerScope = this
+        var count by signal(0)
         var r1 = 0
         var r2 = 0
-        effect { r1 = count.value }
-        effect { r2 = count.value * 10 }
+        effect { r1 = count }
+        effect { r2 = count * 10 }
         assertEquals(0, r1)
         assertEquals(0, r2)
 
-        count.value = 3
+        count = 3
         runCurrent()
         assertEquals(3, r1)
         assertEquals(30, r2)
@@ -193,14 +204,14 @@ class EffectTest {
 
     @Test
     fun `multiple effects fire in batch after signal change`() = runTest {
-        resetSchedulerScope(this)
-        val count = signal(0)
+        schedulerScope = this
+        var count by signal(0)
         val results = mutableListOf<String>()
-        effect { results.add("effect1:${count.value}") }
-        effect { results.add("effect2:${count.value}") }
+        effect { results.add("effect1:$count") }
+        effect { results.add("effect2:$count") }
         assertEquals(2, results.size) // 初始各执行一次
 
-        count.value = 7
+        count = 7
         runCurrent()
         // 两个 effect 都应在同一轮 flush 中执行
         assertTrue(results.contains("effect1:7"))
@@ -212,16 +223,22 @@ class EffectTest {
     // ========================================================================
 
     @Test
-    fun `effect exception does not prevent other effects`() = runTest {
-        resetSchedulerScope(this)
-        val count = signal(0)
+    fun `effect exception during flush does not prevent other effects`() = runTest {
+        schedulerScope = this
+        var count by signal(0)
         var normalRan = false
-        effect { throw RuntimeException("effect error") }
-        effect { count.value; normalRan = true }
+        var shouldThrow = false
+        effect {
+            if (shouldThrow) throw RuntimeException("effect error")
+            count
+        }
+        effect { count; normalRan = true }
+        assertEquals(true, normalRan) // 初始执行成功
 
-        count.value = 1
+        shouldThrow = true
+        count = 1
         runCurrent()
-        // 异常 effect 失败，但正常 effect 仍执行
+        // 异常 effect 在 flush 中失败，但正常 effect 仍执行
         assertTrue(normalRan)
     }
 
@@ -243,28 +260,28 @@ class EffectTest {
 
     @Test
     fun `effect dynamically changes dependencies across executions`() = runTest {
-        resetSchedulerScope(this)
-        val toggle = signal(true)
-        val a = signal(1)
-        val b = signal(10)
+        schedulerScope = this
+        var toggle by signal(true)
+        var a by signal(1)
+        var b by signal(10)
         var result = 0
         effect {
-            result = if (toggle.value) a.value else b.value
+            result = if (toggle) a else b
         }
         assertEquals(1, result) // 初始：依赖 a
 
         // 切换 toggle，effect 的依赖从 a 变为 b
-        toggle.value = false
+        toggle = false
         runCurrent()
         assertEquals(10, result) // effect 重新执行，现在读的是 b
 
         // 修改 a 不应触发 effect
         var callCount = 0
-        val trackEffect = effect { toggle.value; a.value; b.value; callCount++ }
+        val trackEffect = effect { toggle; a; b; callCount++ }
         runCurrent()
         val afterSecondInit = callCount
 
-        a.value = 999
+        a = 999
         runCurrent()
         // a 不再是第一个 effect 的依赖（第一个 effect 上次执行时读的是 b）
         // 但 trackEffect 依赖 a，所以 trackEffect 会触发
@@ -277,7 +294,7 @@ class EffectTest {
 
     @Test
     fun `effect with no signal reads runs once and does not re-trigger`() = runTest {
-        resetSchedulerScope(this)
+        schedulerScope = this
         var callCount = 0
         effect { callCount++ }
         assertEquals(1, callCount)
@@ -288,18 +305,18 @@ class EffectTest {
 
     @Test
     fun `multiple dispose calls on effect do not corrupt state`() {
-        val count = signal(0)
-        val e = effect { count.value }
+        var count by signal(0)
+        val e = effect { count }
         e.dispose()
         e.dispose()
-        count.value = 1
+        count = 1
         // 没有 crash 即为通过
     }
 
     @Test
     fun `effect dispose during execution does not cause issues`() = runTest {
-        resetSchedulerScope(this)
-        val count = signal(0)
+        schedulerScope = this
+        var count by signal(0)
         var selfRef: Effect? = null
         var execCount = 0
         val self = effect {
@@ -307,17 +324,17 @@ class EffectTest {
             if (execCount == 2) {
                 selfRef?.dispose() // 第二次执行时 dispose 自身
             }
-            count.value
+            count
         }.also { selfRef = it }
         assertEquals(1, execCount)
 
         // 触发第二次执行，effect 在其中 dispose 自身
-        count.value = 1
+        count = 1
         runCurrent()
         assertEquals(2, execCount)
 
         // 再次变更，effect 已 dispose 不应再执行
-        count.value = 2
+        count = 2
         runCurrent()
         assertEquals(2, execCount)
     }

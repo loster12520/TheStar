@@ -1,9 +1,12 @@
-package com.thestar.reactive
+﻿package com.thestar.reactive
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -21,20 +24,28 @@ import kotlin.test.assertTrue
  */
 class AsyncTest {
 
+    @BeforeTest
+    fun setUp() {
+        schedulerScope = CoroutineScope(Dispatchers.Default)
+        TrackingContext.scheduled = false
+        TrackingContext.batchDepth = 0
+        TrackingContext.pendingEffects.clear()
+    }
+
     // ========================================================================
     // 微任务时序
     // ========================================================================
 
     @Test
     fun `effect executes asynchronously after write`() = runTest {
-        resetSchedulerScope(this)
-        val count = signal(0)
+        schedulerScope = this
+        var count by signal(0)
         var effectValue = -1
-        effect { effectValue = count.value }
+        effect { effectValue = count }
 
         assertEquals(0, effectValue) // 创建时同步执行
 
-        count.value = 42
+        count = 42
         // 写入后同步检查：effect 尚未执行
         assertEquals(0, effectValue)
         // microtask 之后
@@ -44,40 +55,40 @@ class AsyncTest {
 
     @Test
     fun `multiple writes before microtask are merged into single effect run`() = runTest {
-        resetSchedulerScope(this)
-        val count = signal(0)
+        schedulerScope = this
+        var count by signal(0)
         var effectRuns = 0
-        effect { count.value; effectRuns++ }
+        effect { count; effectRuns++ }
         assertEquals(1, effectRuns)
 
-        count.value = 1
-        count.value = 2
-        count.value = 3
-        count.value = 4
-        count.value = 5
+        count = 1
+        count = 2
+        count = 3
+        count = 4
+        count = 5
 
         assertEquals(1, effectRuns) // 尚未执行
 
         runCurrent()
         assertEquals(2, effectRuns) // 5 次写入合并为 1 次
-        assertEquals(5, count.value)
+        assertEquals(5, count)
     }
 
     @Test
     fun `effect does not re-execute in same microtask after initial flush`() = runTest {
-        resetSchedulerScope(this)
-        val count = signal(0)
+        schedulerScope = this
+        var count by signal(0)
         var effectRuns = 0
-        effect { count.value; effectRuns++ }
+        effect { count; effectRuns++ }
         assertEquals(1, effectRuns)
 
         // 第一次写入
-        count.value = 1
+        count = 1
         runCurrent()
         assertEquals(2, effectRuns)
 
         // 第二次写入（在另一个 microtask 中）
-        count.value = 2
+        count = 2
         runCurrent()
         assertEquals(3, effectRuns)
     }
@@ -88,17 +99,17 @@ class AsyncTest {
 
     @Test
     fun `batch flush happens after outermost batch ends`() = runTest {
-        resetSchedulerScope(this)
-        val a = signal(0)
-        val b = signal(0)
+        schedulerScope = this
+        var a by signal(0)
+        var b by signal(0)
         var effectRuns = 0
-        effect { a.value; b.value; effectRuns++ }
+        effect { a; b; effectRuns++ }
         assertEquals(1, effectRuns)
 
         batch {
-            a.value = 1
+            a = 1
             batch {
-                b.value = 2
+                b = 2
             }
             // 内层 batch 结束，但不 flush
             assertEquals(1, effectRuns)
@@ -112,19 +123,19 @@ class AsyncTest {
 
     @Test
     fun `batch effect execution order is correct`() = runTest {
-        resetSchedulerScope(this)
-        val a = signal(0)
-        val b = signal(0)
+        schedulerScope = this
+        var a by signal(0)
+        var b by signal(0)
         val log = mutableListOf<String>()
 
-        effect { log.add("effect-a:${a.value}") }
-        effect { log.add("effect-b:${b.value}") }
+        effect { log.add("effect-a:$a") }
+        effect { log.add("effect-b:$b") }
         // 初始执行顺序
         assertEquals(2, log.size)
 
         batch {
-            a.value = 1
-            b.value = 2
+            a = 1
+            b = 2
         }
         assertEquals(2, log.size) // batch 内未执行
 
@@ -141,35 +152,35 @@ class AsyncTest {
 
     @Test
     fun `two independent batches produce separate effect rounds`() = runTest {
-        resetSchedulerScope(this)
-        val count = signal(0)
+        schedulerScope = this
+        var count by signal(0)
         var effectRuns = 0
-        effect { count.value; effectRuns++ }
+        effect { count; effectRuns++ }
         assertEquals(1, effectRuns)
 
-        batch { count.value = 1 }
+        batch { count = 1 }
         runCurrent()
         assertEquals(2, effectRuns)
 
-        batch { count.value = 2 }
+        batch { count = 2 }
         runCurrent()
         assertEquals(3, effectRuns)
     }
 
     @Test
     fun `batch inside effect execution context`() = runTest {
-        resetSchedulerScope(this)
-        val a = signal(0)
-        val b = signal(0)
+        schedulerScope = this
+        var a by signal(0)
+        var b by signal(0)
         var bEffectRuns = 0
-        effect { b.value; bEffectRuns++ }
+        effect { b; bEffectRuns++ }
         assertEquals(1, bEffectRuns)
 
         // effect 内部写 signal，这会触发 scheduleFlush
         // 当前没有在执行 effect（主线程测试代码），所以正常调度
         batch {
-            a.value = 1
-            b.value = 1
+            a = 1
+            b = 1
         }
         runCurrent()
         assertEquals(2, bEffectRuns) // batch 中 b 改了一次
@@ -181,13 +192,13 @@ class AsyncTest {
 
     @Test
     fun `dispose effect before microtask prevents execution`() = runTest {
-        resetSchedulerScope(this)
-        val count = signal(0)
+        schedulerScope = this
+        var count by signal(0)
         var effectRuns = 0
-        val e = effect { count.value; effectRuns++ }
+        val e = effect { count; effectRuns++ }
         assertEquals(1, effectRuns)
 
-        count.value = 1 // effect 被加入 pendingEffects
+        count = 1 // effect 被加入 pendingEffects
         e.dispose() // 在微任务执行前 dispose
 
         runCurrent()
@@ -196,8 +207,8 @@ class AsyncTest {
 
     @Test
     fun `dispose effect during microtask flush does not execute it`() = runTest {
-        resetSchedulerScope(this)
-        val count = signal(0)
+        schedulerScope = this
+        var count by signal(0)
         var shouldDispose = false
         lateinit var e1: Effect
         var e1Runs = 0
@@ -206,15 +217,15 @@ class AsyncTest {
         e1 = effect {
             e1Runs++
             if (shouldDispose) e1.dispose()
-            count.value
+            count
         }
-        effect { count.value; e2Runs++ }
+        effect { count; e2Runs++ }
 
         assertEquals(1, e1Runs)
         assertEquals(1, e2Runs)
 
         shouldDispose = true
-        count.value = 1
+        count = 1
         runCurrent()
         // e1 这次执行后 dispose 了自己
         assertEquals(2, e1Runs)
@@ -222,7 +233,7 @@ class AsyncTest {
 
         // 再次变更，e1 不应再执行
         shouldDispose = false // 如果不 dispose 了，但 e1 已经 disposed
-        count.value = 2
+        count = 2
         runCurrent()
         assertEquals(2, e1Runs) // e1 不再执行
         assertEquals(3, e2Runs) // e2 正常执行
@@ -234,15 +245,15 @@ class AsyncTest {
 
     @Test
     fun `signal write from coroutine triggers effect`() = runTest {
-        resetSchedulerScope(this)
-        val count = signal(0)
+        schedulerScope = this
+        var count by signal(0)
         var effectValue = -1
-        effect { effectValue = count.value }
+        effect { effectValue = count }
         assertEquals(0, effectValue)
 
         // 在协程中写入
         launch {
-            count.value = 99
+            count = 99
         }
         // 等待协程执行 + 微任务
         delay(10)
@@ -255,39 +266,39 @@ class AsyncTest {
 
     @Test
     fun `rapid signal writes do not lose updates`() = runTest {
-        resetSchedulerScope(this)
-        val count = signal(0)
+        schedulerScope = this
+        var count by signal(0)
         var effectRuns = 0
-        effect { count.value; effectRuns++ }
+        effect { count; effectRuns++ }
         assertEquals(1, effectRuns)
 
         // 快速写入
         for (i in 1..100) {
-            count.value = i
+            count = i
         }
-        assertEquals(100, count.value)
+        assertEquals(100, count)
         assertEquals(1, effectRuns) // 尚未执行
 
         runCurrent()
         assertEquals(2, effectRuns) // 只执行一次
-        assertEquals(100, count.value)
+        assertEquals(100, count)
     }
 
     @Test
     fun `alternating writes and reads do not corrupt state`() = runTest {
-        resetSchedulerScope(this)
-        val count = signal(0)
+        schedulerScope = this
+        var count by signal(0)
         var effectRuns = 0
-        effect { count.value; effectRuns++ }
+        effect { count; effectRuns++ }
         assertEquals(1, effectRuns)
 
         // 交替写入和读取
         for (i in 1..50) {
-            count.value = i
-            assertEquals(i, count.value) // 同步读取
+            count = i
+            assertEquals(i, count) // 同步读取
         }
         runCurrent()
         assertEquals(2, effectRuns)
-        assertEquals(50, count.value)
+        assertEquals(50, count)
     }
 }

@@ -2,6 +2,7 @@ package com.thestar.reactive
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 /**
@@ -10,7 +11,9 @@ import kotlinx.coroutines.launch
  * 默认为 [Dispatchers.Main]。测试环境可通过 [resetSchedulerScope] 替换为
  * 测试调度器（如 `runTest` 提供的 `TestScope`）。
  */
-internal var schedulerScope: CoroutineScope = CoroutineScope(Dispatchers.Main)
+internal var schedulerScope: CoroutineScope = CoroutineScope(
+    runCatching { Dispatchers.Main }.getOrElse { Dispatchers.Default }
+)
 
 /**
  * 重置调度器作用域（仅供测试使用）。
@@ -25,6 +28,7 @@ internal var schedulerScope: CoroutineScope = CoroutineScope(Dispatchers.Main)
  * ```
  */
 internal fun resetSchedulerScope(scope: CoroutineScope) {
+    schedulerScope.cancel()
     schedulerScope = scope
     // 重置全局状态，防止前一个测试留下的脏状态污染当前测试
     TrackingContext.scheduled = false
@@ -39,10 +43,18 @@ internal fun scheduleFlush() {
         TrackingContext.pendingEffects.isEmpty()
     )
         return
-
+    
     TrackingContext.scheduled = true
     schedulerScope.launch {
-        flushEffects()
+        try {
+            flushEffects()
+        } finally {
+            TrackingContext.scheduled = false
+        }
+    }.invokeOnCompletion { cause ->
+        cause?.run {
+            TrackingContext.scheduled = false
+        }
     }
 }
 

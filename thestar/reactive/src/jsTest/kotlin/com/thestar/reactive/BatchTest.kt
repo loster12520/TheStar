@@ -1,7 +1,10 @@
-package com.thestar.reactive
+﻿package com.thestar.reactive
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -17,23 +20,31 @@ import kotlin.test.assertEquals
  */
 class BatchTest {
 
+    @BeforeTest
+    fun setUp() {
+        schedulerScope = CoroutineScope(Dispatchers.Default)
+        TrackingContext.scheduled = false
+        TrackingContext.batchDepth = 0
+        TrackingContext.pendingEffects.clear()
+    }
+
     // ========================================================================
     // 基本批量更新
     // ========================================================================
 
     @Test
     fun `batch groups multiple writes into single effect run`() = runTest {
-        resetSchedulerScope(this)
-        val a = signal(0)
-        val b = signal(0)
+        schedulerScope = this
+        var a by signal(0)
+        var b by signal(0)
         var effectRuns = 0
-        effect { a.value; b.value; effectRuns++ }
+        effect { a; b; effectRuns++ }
         val afterInit = effectRuns
         assertEquals(1, afterInit)
 
         batch {
-            a.value = 1
-            b.value = 2
+            a = 1
+            b = 2
         }
         // 同步：effect 尚未执行
         assertEquals(1, effectRuns)
@@ -45,32 +56,32 @@ class BatchTest {
 
     @Test
     fun `batch updates values synchronously`() {
-        val a = signal(0)
-        val b = signal(0)
+        var a by signal(0)
+        var b by signal(0)
 
         batch {
-            a.value = 1
-            b.value = 2
+            a = 1
+            b = 2
         }
         // 同步检查：值已更新
-        assertEquals(1, a.value)
-        assertEquals(2, b.value)
+        assertEquals(1, a)
+        assertEquals(2, b)
     }
 
     @Test
     fun `batch with multiple writes to same signal`() = runTest {
-        resetSchedulerScope(this)
-        val count = signal(0)
+        schedulerScope = this
+        var count by signal(0)
         var effectRuns = 0
-        effect { count.value; effectRuns++ }
+        effect { count; effectRuns++ }
         assertEquals(1, effectRuns)
 
         batch {
-            count.value = 1
-            count.value = 2
-            count.value = 3
+            count = 1
+            count = 2
+            count = 3
         }
-        assertEquals(3, count.value)
+        assertEquals(3, count)
         assertEquals(1, effectRuns) // 尚未执行
 
         runCurrent()
@@ -83,22 +94,22 @@ class BatchTest {
 
     @Test
     fun `nested batch defers flush to outermost batch end`() = runTest {
-        resetSchedulerScope(this)
-        val x = signal(0)
+        schedulerScope = this
+        var x by signal(0)
         var effectRuns = 0
-        effect { x.value; effectRuns++ }
+        effect { x; effectRuns++ }
         val afterInit = effectRuns
 
         batch {
-            x.value = 1
+            x = 1
             batch {
-                x.value = 2
+                x = 2
             }
             // 内层 batch 结束，但 flush 被外层阻断
             assertEquals(afterInit, effectRuns)
         }
         // 最外层 batch 结束，此时才调度 flush
-        assertEquals(2, x.value)
+        assertEquals(2, x)
 
         runCurrent()
         assertEquals(afterInit + 1, effectRuns) // 只执行一次
@@ -106,21 +117,21 @@ class BatchTest {
 
     @Test
     fun `triple nested batch works correctly`() = runTest {
-        resetSchedulerScope(this)
-        val x = signal(0)
+        schedulerScope = this
+        var x by signal(0)
         var effectRuns = 0
-        effect { x.value; effectRuns++ }
+        effect { x; effectRuns++ }
         assertEquals(1, effectRuns)
 
         batch {
             batch {
                 batch {
-                    x.value = 99
+                    x = 99
                 }
             }
         }
         // 所有层结束
-        assertEquals(99, x.value)
+        assertEquals(99, x)
         assertEquals(1, effectRuns)
 
         runCurrent()
@@ -129,22 +140,22 @@ class BatchTest {
 
     @Test
     fun `nested batch does not lose updates`() {
-        val a = signal(0)
-        val b = signal(0)
-        val c = signal(0)
+        var a by signal(0)
+        var b by signal(0)
+        var c by signal(0)
 
         batch {
-            a.value = 1
+            a = 1
             batch {
-                b.value = 2
+                b = 2
                 batch {
-                    c.value = 3
+                    c = 3
                 }
             }
         }
-        assertEquals(1, a.value)
-        assertEquals(2, b.value)
-        assertEquals(3, c.value)
+        assertEquals(1, a)
+        assertEquals(2, b)
+        assertEquals(3, c)
     }
 
     // ========================================================================
@@ -155,7 +166,7 @@ class BatchTest {
     fun `batch recovers batchDepth after exception`() {
         try {
             batch {
-                signal(0).value = 1
+                signal(0).basicNode.write(1)
                 throw RuntimeException("batch error")
             }
         } catch (_: RuntimeException) {
@@ -163,16 +174,16 @@ class BatchTest {
         }
         // batchDepth 应恢复到 0（finally 块）
         // 验证：后续操作不受影响
-        val s = signal(0)
-        s.value = 42
-        assertEquals(42, s.value)
+        var s by signal(0)
+        s = 42
+        assertEquals(42, s)
     }
 
     @Test
     fun `nested batch recovers batchDepth after inner exception`() {
         try {
             batch {
-                signal(0).value = 1
+                signal(0).basicNode.write(1)
                 batch {
                     throw RuntimeException("inner batch error")
                 }
@@ -181,9 +192,9 @@ class BatchTest {
             // 预期异常
         }
         // batchDepth 应正确恢复
-        val s = signal(0)
-        s.value = 99
-        assertEquals(99, s.value)
+        var s by signal(0)
+        s = 99
+        assertEquals(99, s)
     }
 
     // ========================================================================
@@ -217,21 +228,21 @@ class BatchTest {
 
     @Test
     fun `successive batches work independently`() = runTest {
-        resetSchedulerScope(this)
-        val count = signal(0)
+        schedulerScope = this
+        var count by signal(0)
         var effectRuns = 0
-        effect { count.value; effectRuns++ }
+        effect { count; effectRuns++ }
         assertEquals(1, effectRuns)
 
-        batch { count.value = 1 }
+        batch { count = 1 }
         runCurrent()
         assertEquals(2, effectRuns)
 
-        batch { count.value = 2 }
+        batch { count = 2 }
         runCurrent()
         assertEquals(3, effectRuns)
 
-        batch { count.value = 3 }
+        batch { count = 3 }
         runCurrent()
         assertEquals(4, effectRuns)
     }

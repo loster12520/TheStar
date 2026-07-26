@@ -1,7 +1,10 @@
-package com.thestar.reactive
+﻿package com.thestar.reactive
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -19,54 +22,65 @@ import kotlin.test.assertTrue
  */
 class UntrackTest {
 
+    @BeforeTest
+    fun setUp() {
+        schedulerScope = CoroutineScope(Dispatchers.Default)
+        TrackingContext.scheduled = false
+        TrackingContext.batchDepth = 0
+        TrackingContext.pendingEffects.clear()
+    }
+
     // ========================================================================
     // 基本功能
     // ========================================================================
 
     @Test
     fun `untrack returns computed value`() {
-        val count = signal(5)
-        val result = untrack { count.value * 10 }
+        var count by signal(5)
+        val result = untrack { count * 10 }
         assertEquals(50, result)
     }
 
     @Test
     fun `untrack prevents dependency tracking`() = runTest {
-        resetSchedulerScope(this)
-        val a = signal(0)
+        schedulerScope = this
+        val aSig = signal(0)
+        var a by aSig
         var effectRuns = 0
         effect {
-            untrack { a.value } // 不追踪 a
+            untrack { a } // 不追踪 a
             effectRuns++
         }
         val afterInit = effectRuns
         assertEquals(1, afterInit)
 
-        a.value = 1 // 不应触发 effect
+        a = 1 // 不应触发 effect
         runCurrent()
         assertEquals(1, effectRuns)
     }
 
     @Test
     fun `untrack read does not register observer`() {
-        val a = signal(0)
+        val aSig = signal(0)
+        var a by aSig
         // 在 tracking context 中（effect 内），untrack 内的读取不应注册
         effect {
-            untrack { a.value }
+            untrack { a }
         }
         // a 的 node 不应有 observer（因为读取在 untrack 内）
-        assertTrue(a.node.observers.isEmpty())
+        assertTrue(aSig.basicNode.observers.isEmpty())
     }
 
     @Test
     fun `untrack within effect does not add to sources`() {
-        val a = signal(0)
+        val aSig = signal(0)
+        var a by aSig
         effect {
-            val v = untrack { a.value }
+            val v = untrack { a }
             assertEquals(0, v)
         }
         // 验证 a 没有 observer（untrack 内读取不注册依赖）
-        assertTrue(a.node.observers.isEmpty())
+        assertTrue(aSig.basicNode.observers.isEmpty())
     }
 
     // ========================================================================
@@ -75,26 +89,26 @@ class UntrackTest {
 
     @Test
     fun `untrack mixed with tracked reads in same effect`() = runTest {
-        resetSchedulerScope(this)
-        val a = signal(0)
-        val b = signal(0)
+        schedulerScope = this
+        var a by signal(0)
+        var b by signal(0)
         var tracked = 0
         var untracked = 0
         effect {
-            tracked = a.value // 追踪 a
-            untracked = untrack { b.value } // 不追踪 b
+            tracked = a // 追踪 a
+            untracked = untrack { b } // 不追踪 b
         }
         assertEquals(0, tracked)
         assertEquals(0, untracked)
 
         // 只修改 b，不应触发 effect
-        b.value = 5
+        b = 5
         runCurrent()
         // a 未变，effect 不应触发
         assertEquals(0, tracked)
 
         // 修改 a，触发 effect
-        a.value = 1
+        a = 1
         runCurrent()
         assertEquals(1, tracked)
         assertEquals(5, untracked) // untrack 也更新了（因为 effect 整体重跑了）
@@ -106,18 +120,19 @@ class UntrackTest {
 
     @Test
     fun `nested untrack still prevents tracking`() {
-        val a = signal(0)
+        val aSig = signal(0)
+        var a by aSig
         var result = 0
         effect {
             result = untrack {
                 untrack {
-                    a.value
+                    a
                 }
             }
         }
         assertEquals(0, result)
         // 嵌套 untrack 仍然不注册依赖
-        assertTrue(a.node.observers.isEmpty())
+        assertTrue(aSig.basicNode.observers.isEmpty())
     }
 
     // ========================================================================
@@ -126,14 +141,14 @@ class UntrackTest {
 
     @Test
     fun `untrack with memo inside batch`() {
-        val count = signal(1)
-        val double = memo { count.value * 2 }
+        var count by signal(1)
+        val double by memo { count * 2 }
         var result = 0
 
         batch {
-            count.value = 10
-            // untrack 读 memo：获取当前缓存值（可能为脏值）
-            result = untrack { double.value }
+            count = 10
+            // untrack 读 memo：获取当前缓存值
+            result = untrack { double }
         }
         // batch 内同步：double 未重算（dirty），untrack 读取触发重算
         assertEquals(20, result)
@@ -141,13 +156,13 @@ class UntrackTest {
 
     @Test
     fun `untrack reads current value even if dirty`() {
-        val count = signal(1)
-        val double = memo { count.value * 2 }
-        assertEquals(2, double.value)
+        var count by signal(1)
+        val double by memo { count * 2 }
+        assertEquals(2, double)
 
-        count.value = 10
+        count = 10
         // double 现在是 dirty，untrack 读取仍获取正确值（触发重算）
-        val result = untrack { double.value }
+        val result = untrack { double }
         assertEquals(20, result)
     }
 
@@ -163,8 +178,8 @@ class UntrackTest {
 
     @Test
     fun `untrack outside any tracking context works normally`() {
-        val s = signal(1)
-        val result = untrack { s.value * 2 }
+        var s by signal(1)
+        val result = untrack { s * 2 }
         assertEquals(2, result)
     }
 
